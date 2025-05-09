@@ -1,5 +1,5 @@
 // src/components/Dashboard.tsx
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react"; // Added useCallback
 import { Avatar } from "./Avatar";
 import { ProgressCard } from "./ProgressCard";
 import { QuestLog } from "./QuestLog";
@@ -8,12 +8,13 @@ import { MotivationCard } from "./MotivationCard";
 import { CreateQuestModal, QuestFormData, GeneratedPlan, QuestStep } from "./CreateQuestModal";
 import { BellIcon, ChevronRightIcon } from "lucide-react";
 
-// Updated ActiveQuest interface
-interface ActiveQuest extends GeneratedPlan {
+// ActiveQuest interface now includes the plan (array of QuestStep)
+export interface ActiveQuest extends GeneratedPlan { // GeneratedPlan already includes questTitle and plan
   id: string;
   createdAt: string;
-  originalDescription?: string; // To store the original description from the form
-  targetDate?: string;        // To store the target date from the form
+  originalDescription?: string;
+  targetDate?: string;
+  // 'plan' (QuestStep[]) is inherited from GeneratedPlan
 }
 
 export const Dashboard = () => {
@@ -21,28 +22,22 @@ export const Dashboard = () => {
   const [activeQuests, setActiveQuests] = useState<ActiveQuest[]>([]);
 
   const handleOpenModal = () => {
-    setIsModalOpen(true); // Clear previous errors when opening
+    setIsModalOpen(true);
   };
   const handleCloseModal = () => {
     setIsModalOpen(false);
   };
 
-  // Updated to call the backend API
   const handleCreateQuest = async (questData: QuestFormData) => {
     console.log("Attempting to create quest with data:", questData);
-
-    // The CreateQuestModal will handle its own loading state and error display based on this promise.
     try {
       const response = await fetch('http://localhost:3001/api/quests/create-plan', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(questData), // Send all data from the form
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(questData),
       });
 
       if (!response.ok) {
-        // Try to parse the error message from the backend
         const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
         throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
       }
@@ -50,27 +45,51 @@ export const Dashboard = () => {
       const newQuestPlanFromServer: GeneratedPlan = await response.json();
       console.log("Received plan from backend:", newQuestPlanFromServer);
 
+      // Ensure all steps from backend have a 'completed' field initialized to false
+      const planWithCompletion = newQuestPlanFromServer.plan.map(step => ({
+        ...step,
+        completed: step.completed === undefined ? false : step.completed,
+        // Ensure 'day' is present, if not, use index. Backend should provide 'day'.
+        day: step.day === undefined ? (newQuestPlanFromServer.plan.indexOf(step) + 1) : step.day
+      }));
+
+
       const newActiveQuest: ActiveQuest = {
-        ...newQuestPlanFromServer, // Spread the plan received from the server
-        id: `quest-${Date.now()}`,  // Frontend generated ID for now; backend could also provide this
+        ...newQuestPlanFromServer,
+        plan: planWithCompletion, // Use the processed plan
+        id: `quest-${Date.now()}`,
         createdAt: new Date().toISOString(),
-        originalDescription: questData.description, // Keep original description
-        targetDate: questData.targetDate,           // Keep target date
+        originalDescription: questData.description,
+        targetDate: questData.targetDate,
       };
 
       setActiveQuests(prevQuests => [newActiveQuest, ...prevQuests]);
-      handleCloseModal(); // Close the modal on successful creation
-
-      // Optionally, you can add a more sophisticated success notification here
-      // For example, using a toast library: toast.success("Quest created successfully!");
-
+      handleCloseModal();
     } catch (error: any) {
       console.error("Failed to create quest:", error);
-      // Re-throw the error so that the CreateQuestModal's handleSubmit
-      // can catch it and update its internal error state to display the message.
       throw error;
     }
   };
+
+  // --- New Handler for Toggling Step Completion ---
+  const handleToggleStepCompletion = useCallback((questId: string, stepDay: number) => {
+    setActiveQuests(prevQuests =>
+      prevQuests.map(quest => {
+        if (quest.id === questId) {
+          const updatedPlan = quest.plan.map(step => {
+            if (step.day === stepDay) {
+              return { ...step, completed: !step.completed };
+            }
+            return step;
+          });
+          return { ...quest, plan: updatedPlan };
+        }
+        return quest;
+      })
+    );
+    console.log(`Toggled step ${stepDay} for quest ${questId}`);
+  }, []); // Empty dependency array as it only uses setActiveQuests
+
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -95,7 +114,6 @@ export const Dashboard = () => {
 
       {/* Main grid layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left column - Avatar and stats */}
         <div className="lg:col-span-1">
           <Avatar />
           <div className="mt-6 grid grid-cols-2 gap-4">
@@ -105,14 +123,14 @@ export const Dashboard = () => {
           <MotivationCard className="mt-6" />
         </div>
 
-        {/* Right column - Quests and achievements */}
         <div className="lg:col-span-2">
           <QuestLog
             activeQuests={activeQuests}
             onNewQuestClick={handleOpenModal}
+            onToggleStep={handleToggleStepCompletion} // Pass the new handler
           />
           
-          {/* Example: Displaying newly created quest titles directly in Dashboard for quick check */}
+          {/* Example: Displaying quest plan details for quick check */}
           {activeQuests.length > 0 && (
             <div className="mt-6 p-4 bg-slate-800 border border-slate-700 rounded-xl">
               <h3 className="text-lg font-semibold mb-2 text-purple-300">Recently Added Quest Plans (via Backend):</h3>
@@ -120,6 +138,7 @@ export const Dashboard = () => {
                 {activeQuests.map(quest => (
                   <li key={quest.id} className="text-slate-300">
                     - {quest.questTitle} ({quest.plan.length} steps planned by {quest.plan[0]?.taskTitle.startsWith('AI:') ? 'AI' : 'User'})
+                    ({quest.plan.filter(s => s.completed).length}/{quest.plan.length} steps completed)
                   </li>
                 ))}
               </ul>
@@ -138,11 +157,10 @@ export const Dashboard = () => {
         </div>
       </div>
 
-      {/* Modal for Creating New Quest */}
       <CreateQuestModal
         isOpen={isModalOpen}
         onClose={handleCloseModal}
-        onQuestCreate={handleCreateQuest} // This now calls the backend
+        onQuestCreate={handleCreateQuest}
       />
     </div>
   );
