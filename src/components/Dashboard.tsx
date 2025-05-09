@@ -2,60 +2,74 @@
 import React, { useState } from "react";
 import { Avatar } from "./Avatar";
 import { ProgressCard } from "./ProgressCard";
-import { QuestLog } from "./QuestLog"; // QuestLog will now trigger the modal
+import { QuestLog } from "./QuestLog";
 import { BadgeCollection } from "./BadgeCollection";
 import { MotivationCard } from "./MotivationCard";
 import { CreateQuestModal, QuestFormData, GeneratedPlan, QuestStep } from "./CreateQuestModal";
-import { BellIcon, ChevronRightIcon } from "lucide-react"; // Removed PlusCircleIcon
+import { BellIcon, ChevronRightIcon } from "lucide-react";
 
-// Define a simple type for an active quest for demonstration
+// Updated ActiveQuest interface
 interface ActiveQuest extends GeneratedPlan {
   id: string;
   createdAt: string;
+  originalDescription?: string; // To store the original description from the form
+  targetDate?: string;        // To store the target date from the form
 }
 
 export const Dashboard = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeQuests, setActiveQuests] = useState<ActiveQuest[]>([]);
 
-  const handleOpenModal = () => setIsModalOpen(true);
-  const handleCloseModal = () => setIsModalOpen(false);
+  const handleOpenModal = () => {
+    setIsModalOpen(true); // Clear previous errors when opening
+  };
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+  };
 
+  // Updated to call the backend API
   const handleCreateQuest = async (questData: QuestFormData) => {
-    console.log("Quest Data from Modal:", questData);
-    // --- HERE YOU WILL CALL YOUR BACKEND API ---
-    // For now, let's simulate an API call and a response from Gemini
-    setIsModalOpen(false); // Optimistically close modal, or wait for API response
+    console.log("Attempting to create quest with data:", questData);
 
-    // Simulate API call delay and processing
-    // In a real app, you'd have a loading state in the modal or on the button
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    // The CreateQuestModal will handle its own loading state and error display based on this promise.
+    try {
+      const response = await fetch('http://localhost:3001/api/quests/create-plan', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(questData), // Send all data from the form
+      });
 
-    // Mocked response from the backend (which would have called Gemini)
-    const mockSteps: QuestStep[] = questData.useAi ? [
-      { day: 1, taskTitle: `Understand ${questData.title} Basics`, taskDescription: "Research core concepts and gather resources.", duration: "2 hours", xp: 50, completed: false },
-      { day: 2, taskTitle: `Setup for ${questData.title}`, taskDescription: "Install tools, create project structure.", duration: "1.5 hours", xp: 40, completed: false },
-      { day: 3, taskTitle: `First Practical Step for ${questData.title}`, taskDescription: "Complete a small tutorial or initial task.", duration: "2.5 hours", xp: 75, completed: false },
-    ] : [
-      { day: 1, taskTitle: `Begin working on ${questData.title}`, taskDescription: questData.description, duration: "Ongoing", xp: 100, completed: false }
-    ];
+      if (!response.ok) {
+        // Try to parse the error message from the backend
+        const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
 
-    const newQuestPlan: GeneratedPlan = {
-      questTitle: questData.title,
-      plan: mockSteps,
-    };
+      const newQuestPlanFromServer: GeneratedPlan = await response.json();
+      console.log("Received plan from backend:", newQuestPlanFromServer);
 
-    const newActiveQuest: ActiveQuest = {
-      ...newQuestPlan,
-      id: `quest-${Date.now()}`, // Simple unique ID
-      createdAt: new Date().toISOString(),
+      const newActiveQuest: ActiveQuest = {
+        ...newQuestPlanFromServer, // Spread the plan received from the server
+        id: `quest-${Date.now()}`,  // Frontend generated ID for now; backend could also provide this
+        createdAt: new Date().toISOString(),
+        originalDescription: questData.description, // Keep original description
+        targetDate: questData.targetDate,           // Keep target date
+      };
+
+      setActiveQuests(prevQuests => [newActiveQuest, ...prevQuests]);
+      handleCloseModal(); // Close the modal on successful creation
+
+      // Optionally, you can add a more sophisticated success notification here
+      // For example, using a toast library: toast.success("Quest created successfully!");
+
+    } catch (error: any) {
+      console.error("Failed to create quest:", error);
+      // Re-throw the error so that the CreateQuestModal's handleSubmit
+      // can catch it and update its internal error state to display the message.
+      throw error;
     }
-
-    setActiveQuests(prevQuests => [newActiveQuest, ...prevQuests]);
-    console.log("Simulated new quest plan:", newActiveQuest);
-
-    // Modal is already closed or will be closed by the modal itself upon successful submission
-    // handleCloseModal(); // No longer strictly needed here if modal handles its own close on success
   };
 
   return (
@@ -70,7 +84,6 @@ export const Dashboard = () => {
             Continue your journey to productivity mastery
           </p>
         </div>
-        {/* The "New Quest" button that was here has been removed */}
         <button className="hidden md:flex items-center bg-slate-700 hover:bg-slate-600 text-white rounded-lg px-4 py-2.5 text-sm transition-colors">
             <BellIcon size={16} className="mr-2" />
             <span>Notifications</span>
@@ -94,20 +107,19 @@ export const Dashboard = () => {
 
         {/* Right column - Quests and achievements */}
         <div className="lg:col-span-2">
-          {/* Pass activeQuests and handleOpenModal to QuestLog */}
           <QuestLog
             activeQuests={activeQuests}
-            onNewQuestClick={handleOpenModal} // Pass the function to open the modal
+            onNewQuestClick={handleOpenModal}
           />
           
           {/* Example: Displaying newly created quest titles directly in Dashboard for quick check */}
           {activeQuests.length > 0 && (
             <div className="mt-6 p-4 bg-slate-800 border border-slate-700 rounded-xl">
-              <h3 className="text-lg font-semibold mb-2 text-purple-300">Recently Added Quest Plans:</h3>
+              <h3 className="text-lg font-semibold mb-2 text-purple-300">Recently Added Quest Plans (via Backend):</h3>
               <ul className="space-y-1 text-sm">
                 {activeQuests.map(quest => (
                   <li key={quest.id} className="text-slate-300">
-                    - {quest.questTitle} ({quest.plan.length} steps)
+                    - {quest.questTitle} ({quest.plan.length} steps planned by {quest.plan[0]?.taskTitle.startsWith('AI:') ? 'AI' : 'User'})
                   </li>
                 ))}
               </ul>
@@ -130,7 +142,7 @@ export const Dashboard = () => {
       <CreateQuestModal
         isOpen={isModalOpen}
         onClose={handleCloseModal}
-        onQuestCreate={handleCreateQuest}
+        onQuestCreate={handleCreateQuest} // This now calls the backend
       />
     </div>
   );
